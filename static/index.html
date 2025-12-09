@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Market Data Query Interface</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 Market Data Query Interface</h1>
+            <p class="subtitle">Ask questions about market data in natural language</p>
+        </header>
+
+        <div class="main-content">
+            <div class="query-section">
+                <div class="input-container">
+                    <textarea 
+                        id="queryInput" 
+                        placeholder="Try asking: 'What is the current price of Bitcoin?' or 'Show me the highest price for Apple' or 'List all assets'"
+                        rows="3"
+                    ></textarea>
+                    <button id="submitBtn" onclick="submitQuery()">
+                        <span>Query</span>
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                            <path d="M18 2L9 11M18 2L12 18L9 11M18 2L2 8L9 11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                </div>
+                
+                <div class="examples">
+                    <p class="examples-label">Example queries:</p>
+                    <div class="example-tags">
+                        <span class="example-tag" onclick="fillExample('What is the price of Bitcoin?')">Bitcoin price</span>
+                        <span class="example-tag" onclick="fillExample('Show me the highest price for Apple')">Apple max price</span>
+                        <span class="example-tag" onclick="fillExample('What is the average price of Gold?')">Gold average</span>
+                        <span class="example-tag" onclick="fillExample('List all assets')">List assets</span>
+                        <span class="example-tag" onclick="fillExample('Show recent data for Tesla')">Tesla recent</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="response-section" id="responseSection">
+                <div class="response-placeholder">
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M2 17L12 22L22 17" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M2 12L12 17L22 12" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <p>Enter a query above to get started</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
+

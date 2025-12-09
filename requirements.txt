@@ -1,4 +1,6 @@
 kagglehub
 mysql-connector-python
 tabulate
+flask
+flask-cors
 
