@@ -4,8 +4,12 @@ import mysql.connector
 import re
 import os
 
+APP_VERSION = "v7-debug-xyz"
 app = Flask(__name__, static_folder='static')
-CORS(app)  # Enable CORS for frontend
+CORS(app, resources={
+    r"/api/*": {"origins": "*", "methods": ["GET", "POST", "OPTIONS"], "allow_headers": ["Content-Type"]},
+    r"/*": {"origins": "*"}
+})  # Enable CORS for frontend
 
 # Database connection configuration
 DB_CONFIG = {
@@ -116,8 +120,13 @@ def execute_query(parsed):
     result = {'success': True, 'data': [], 'message': ''}
     
     try:
-        if parsed['query_type'] == 'list':
-            # List all assets
+        query_type = parsed.get('query_type')
+        asset_id = parsed.get('asset_id')
+        asset_name = parsed.get('asset_name')
+        target_date = parsed.get('target_date')
+
+        # 1. List queries (don't need a specific asset)
+        if query_type == 'list':
             cursor.execute("""
                 SELECT a.asset_id, a.name, a.symbol, at.name as type_name
                 FROM Asset a
@@ -126,103 +135,136 @@ def execute_query(parsed):
             """)
             result['data'] = cursor.fetchall()
             result['message'] = f"Found {len(result['data'])} assets"
-        
-        elif parsed['asset_id']:
-            asset_id = parsed['asset_id']
-            
-            if parsed['query_type'] == 'recent':
-                # Get most recent data
-                cursor.execute("""
-                    SELECT dmd.obs_date, dmd.price, dmd.volume, a.name, a.symbol
-                    FROM DailyMarketData dmd
-                    JOIN Asset a ON dmd.asset_id = a.asset_id
-                    WHERE dmd.asset_id = %s
-                    ORDER BY dmd.obs_date DESC
-                    LIMIT 10
-                """, (asset_id,))
-                result['data'] = cursor.fetchall()
-                result['message'] = f"Recent data for {parsed['asset_name']}"
-            
-            elif parsed['query_type'] == 'max':
-                # Get maximum price
-                cursor.execute("""
-                    SELECT dmd.obs_date, dmd.price, dmd.volume, a.name, a.symbol
-                    FROM DailyMarketData dmd
-                    JOIN Asset a ON dmd.asset_id = a.asset_id
-                    WHERE dmd.asset_id = %s AND dmd.price IS NOT NULL
-                    ORDER BY dmd.price DESC
-                    LIMIT 1
-                """, (asset_id,))
-                result['data'] = cursor.fetchall()
-                if result['data']:
-                    result['message'] = f"Highest price for {parsed['asset_name']}: ${result['data'][0]['price']:.2f} on {result['data'][0]['obs_date']}"
-            
-            elif parsed['query_type'] == 'min':
-                # Get minimum price
-                cursor.execute("""
-                    SELECT dmd.obs_date, dmd.price, dmd.volume, a.name, a.symbol
-                    FROM DailyMarketData dmd
-                    JOIN Asset a ON dmd.asset_id = a.asset_id
-                    WHERE dmd.asset_id = %s AND dmd.price IS NOT NULL
-                    ORDER BY dmd.price ASC
-                    LIMIT 1
-                """, (asset_id,))
-                result['data'] = cursor.fetchall()
-                if result['data']:
-                    result['message'] = f"Lowest price for {parsed['asset_name']}: ${result['data'][0]['price']:.2f} on {result['data'][0]['obs_date']}"
-            
-            elif parsed['query_type'] == 'average':
-                # Get average price
-                cursor.execute("""
-                    SELECT AVG(dmd.price) as avg_price, COUNT(*) as count, a.name, a.symbol
-                    FROM DailyMarketData dmd
-                    JOIN Asset a ON dmd.asset_id = a.asset_id
-                    WHERE dmd.asset_id = %s AND dmd.price IS NOT NULL
-                """, (asset_id,))
-                row = cursor.fetchone()
-                if row and row['avg_price']:
-                    result['data'] = [row]
-                    result['message'] = f"Average price for {parsed['asset_name']}: ${row['avg_price']:.2f} (based on {row['count']} records)"
-            
-            elif parsed['target_date']:
-                # Get data for specific date
-                cursor.execute("""
-                    SELECT dmd.obs_date, dmd.price, dmd.volume, a.name, a.symbol
-                    FROM DailyMarketData dmd
-                    JOIN Asset a ON dmd.asset_id = a.asset_id
-                    WHERE dmd.asset_id = %s AND dmd.obs_date = %s
-                """, (asset_id, parsed['target_date']))
-                result['data'] = cursor.fetchall()
-                if result['data']:
-                    row = result['data'][0]
-                    result['message'] = f"{parsed['asset_name']} on {parsed['target_date']}: Price ${row['price']:.2f}, Volume {row['volume'] if row['volume'] else 'N/A'}"
-                else:
-                    result['message'] = f"No data found for {parsed['asset_name']} on {parsed['target_date']}"
-            
-            else:
-                # General query - get recent data
-                cursor.execute("""
-                    SELECT dmd.obs_date, dmd.price, dmd.volume, a.name, a.symbol
-                    FROM DailyMarketData dmd
-                    JOIN Asset a ON dmd.asset_id = a.asset_id
-                    WHERE dmd.asset_id = %s
-                    ORDER BY dmd.obs_date DESC
-                    LIMIT 20
-                """, (asset_id,))
-                result['data'] = cursor.fetchall()
-                result['message'] = f"Data for {parsed['asset_name']}"
-        
-        else:
-            # No specific asset - show general info
+            return result
+
+        # 2. No asset detected
+        if not asset_id:
+            # They clearly asked for a metric but no asset name
+            if query_type in ['price', 'volume', 'max', 'min', 'average', 'recent']:
+                result['success'] = False
+                result['error'] = (
+                    "I couldn't figure out which asset you're asking about. "
+                    "Please include a specific asset name, e.g. "
+                    "'What is the price of Bitcoin?', "
+                    "'Show recent data for Tesla', or "
+                    "'What is the average price of Gold?'."
+                )
+                result['message'] = ''
+                return result
+
+            # Completely general / illegible query
+            result['success'] = False
+            result['error'] = (
+                "I couldn't understand that query. "
+                "Try something like:\n"
+                "• 'What is the price of Bitcoin?'\n"
+                "• 'Show recent data for Tesla'\n"
+                "• 'Show the highest price for Apple'\n"
+                "• 'List all assets'"
+            )
+            result['message'] = ''
+            return result
+
+        # 3. Asset-specific queries
+        if query_type == 'recent':
+            # Get most recent data
             cursor.execute("""
-                SELECT COUNT(*) as total_records,
-                       MIN(obs_date) as earliest_date,
-                       MAX(obs_date) as latest_date
-                FROM DailyMarketData
-            """)
+                SELECT dmd.obs_date, dmd.price, dmd.volume, a.name, a.symbol
+                FROM DailyMarketData dmd
+                JOIN Asset a ON dmd.asset_id = a.asset_id
+                WHERE dmd.asset_id = %s
+                ORDER BY dmd.obs_date DESC
+                LIMIT 10
+            """, (asset_id,))
             result['data'] = cursor.fetchall()
-            result['message'] = "Database contains market data from various assets"
-    
+            result['message'] = f"Recent data for {asset_name}"
+
+        elif query_type == 'max':
+            # Get maximum price
+            cursor.execute("""
+                SELECT dmd.obs_date, dmd.price, dmd.volume, a.name, a.symbol
+                FROM DailyMarketData dmd
+                JOIN Asset a ON dmd.asset_id = a.asset_id
+                WHERE dmd.asset_id = %s AND dmd.price IS NOT NULL
+                ORDER BY dmd.price DESC
+                LIMIT 1
+            """, (asset_id,))
+            result['data'] = cursor.fetchall()
+            if result['data']:
+                row = result['data'][0]
+                result['message'] = (
+                    f"Highest price for {asset_name}: "
+                    f"${row['price']:.2f} on {row['obs_date']}"
+                )
+
+        elif query_type == 'min':
+            # Get minimum price
+            cursor.execute("""
+                SELECT dmd.obs_date, dmd.price, dmd.volume, a.name, a.symbol
+                FROM DailyMarketData dmd
+                JOIN Asset a ON dmd.asset_id = a.asset_id
+                WHERE dmd.asset_id = %s AND dmd.price IS NOT NULL
+                ORDER BY dmd.price ASC
+                LIMIT 1
+            """, (asset_id,))
+            result['data'] = cursor.fetchall()
+            if result['data']:
+                row = result['data'][0]
+                result['message'] = (
+                    f"Lowest price for {asset_name}: "
+                    f"${row['price']:.2f} on {row['obs_date']}"
+                )
+
+        elif query_type == 'average':
+            # Get average price
+            cursor.execute("""
+                SELECT AVG(dmd.price) as avg_price, COUNT(*) as count, a.name, a.symbol
+                FROM DailyMarketData dmd
+                JOIN Asset a ON dmd.asset_id = a.asset_id
+                WHERE dmd.asset_id = %s AND dmd.price IS NOT NULL
+            """, (asset_id,))
+            row = cursor.fetchone()
+            if row and row['avg_price']:
+                result['data'] = [row]
+                result['message'] = (
+                    f"Average price for {asset_name}: "
+                    f"${row['avg_price']:.2f} (based on {row['count']} records)"
+                )
+
+        elif target_date:
+            # Get data for specific date
+            cursor.execute("""
+                SELECT dmd.obs_date, dmd.price, dmd.volume, a.name, a.symbol
+                FROM DailyMarketData dmd
+                JOIN Asset a ON dmd.asset_id = a.asset_id
+                WHERE dmd.asset_id = %s AND dmd.obs_date = %s
+            """, (asset_id, target_date))
+            result['data'] = cursor.fetchall()
+            if result['data']:
+                row = result['data'][0]
+                result['message'] = (
+                    f"{asset_name} on {target_date}: "
+                    f"Price ${row['price']:.2f}, "
+                    f"Volume {row['volume'] if row['volume'] else 'N/A'}"
+                )
+            else:
+                result['message'] = (
+                    f"No data found for {asset_name} on {target_date}"
+                )
+
+        else:
+            # General asset query - get recent data
+            cursor.execute("""
+                SELECT dmd.obs_date, dmd.price, dmd.volume, a.name, a.symbol
+                FROM DailyMarketData dmd
+                JOIN Asset a ON dmd.asset_id = a.asset_id
+                WHERE dmd.asset_id = %s
+                ORDER BY dmd.obs_date DESC
+                LIMIT 20
+            """, (asset_id,))
+            result['data'] = cursor.fetchall()
+            result['message'] = f"Data for {asset_name}"
+
     except mysql.connector.Error as e:
         result['success'] = False
         result['error'] = str(e)
@@ -234,10 +276,21 @@ def execute_query(parsed):
     
     return result
 
-@app.route('/api/query', methods=['POST'])
+@app.route('/api/query', methods=['POST', 'OPTIONS'])
 def handle_query():
     """Handle natural language query"""
+    if request.method == 'OPTIONS':
+        # Handle preflight request
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        return response
+    
     data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'Invalid JSON'}), 400
+    
     query = data.get('query', '').strip()
     
     if not query:
@@ -249,11 +302,18 @@ def handle_query():
     # Execute the query
     result = execute_query(parsed)
     
-    return jsonify(result)
+    response = jsonify(result)
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    return response
 
-@app.route('/api/assets', methods=['GET'])
+@app.route('/api/assets', methods=['GET', 'OPTIONS'])
 def get_assets():
     """Get list of all assets"""
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response
+    
     conn = get_db_connection()
     if not conn:
         return jsonify({'error': 'Database connection failed'}), 500
@@ -267,7 +327,9 @@ def get_assets():
             ORDER BY a.name
         """)
         assets = cursor.fetchall()
-        return jsonify({'success': True, 'data': assets})
+        response = jsonify({'success': True, 'data': assets})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response
     except mysql.connector.Error as e:
         return jsonify({'success': False, 'error': str(e)}), 500
     finally:
@@ -277,22 +339,47 @@ def get_assets():
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
-    return jsonify({'status': 'ok'})
+    return jsonify({'status': 'ok', 'version': APP_VERSION})
 
 @app.route('/')
 def index():
-    """Serve the main HTML page"""
-    return send_file(os.path.join(app.static_folder, 'index.html'))
+    """Serve the main HTML page with no-cache headers"""
+    response = send_file(os.path.join(app.static_folder, 'index.html'))
+    # Add headers to prevent caching during development
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
+# Flask will automatically serve static files from the static_folder
+# But we keep explicit routes for better control
 @app.route('/style.css')
 def serve_css():
-    """Serve CSS file"""
-    return send_file(os.path.join(app.static_folder, 'style.css'))
+    """Serve CSS file with no-cache headers"""
+    try:
+        response = send_file(os.path.join(app.static_folder, 'style.css'), mimetype='text/css')
+        # Add headers to prevent caching during development
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
+    except Exception as e:
+        print(f"Error serving CSS: {e}")
+        return '', 404
 
 @app.route('/script.js')
 def serve_js():
-    """Serve JavaScript file"""
-    return send_file(os.path.join(app.static_folder, 'script.js'))
+    """Serve JavaScript file with no-cache headers"""
+    try:
+        response = send_file(os.path.join(app.static_folder, 'script.js'), mimetype='application/javascript')
+        # Add headers to prevent caching during development
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
+    except Exception as e:
+        print(f"Error serving JS: {e}")
+        return '', 404
 
 @app.route('/favicon.ico')
 def favicon():
@@ -302,8 +389,8 @@ def favicon():
 if __name__ == '__main__':
     print("Starting Flask server...")
     print("Open your browser and navigate to:")
-    print("  http://localhost:5000")
-    print("  or http://127.0.0.1:5000")
+    print("  http://127.0.0.1:8000")
     print("Press Ctrl+C to stop the server")
-    app.run(debug=True, host='127.0.0.1', port=5000, threaded=True)
+    app.run(debug=True, host='127.0.0.1', port=8000, threaded=True)
+
 
