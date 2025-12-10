@@ -123,6 +123,44 @@ This script will:
    python load_data.py
    ```
 
+## Frontend for Market Data Query Interface
+
+A modern web interface for querying market data using natural language.
+
+### Features
+
+- **Natural Language Queries**: Ask questions in plain English about market data
+- **Modern UI**: Clean, responsive design with gradient styling
+- **Real-time Feedback**: Get instant responses to your queries
+- **Example Queries**: Click on example tags to quickly try different queries
+
+### Setup
+
+1. **Install Dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. **Configure Database**:
+   Make sure your MySQL database is running and update the `DB_CONFIG` in `app.py` if needed:
+   ```python
+   DB_CONFIG = {
+       'host': '127.0.0.1',
+       'port': 3306,
+       'user': 'root',
+       'password': '',  # Update if needed
+       'database': 'market_data'
+   }
+   ```
+
+3. **Run the Flask Server**:
+   ```bash
+   python app.py
+   ```
+
+4. **Open in Browser**:
+   Navigate to `http://127.0.0.1:8000/` in your web browser
+
 ## Database Schema
 
 ### Table: AssetType
@@ -260,11 +298,8 @@ ORDER BY max_price DESC;
 - [ ] Add indexes for performance optimization
 - [ ] Create backup/restore scripts
 
-## License
-
-[Add your license information here]
-
 ## Contributors
 
-[Add contributor information here]
+Charles Weng
+Cassie Zhang
 
