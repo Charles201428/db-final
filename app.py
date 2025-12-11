@@ -1,50 +1,68 @@
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import mysql.connector
-import re
 import os
 
-APP_VERSION = "v7-debug-xyz"
-app = Flask(__name__, static_folder='static')
-CORS(app, resources={
-    r"/api/*": {"origins": "*", "methods": ["GET", "POST", "OPTIONS"], "allow_headers": ["Content-Type"]},
-    r"/*": {"origins": "*"}
-})  # Enable CORS for frontend
+# Optional: load .env automatically if python-dotenv is installed
+try:
+    from dotenv import load_dotenv
 
-# Database connection configuration
+    load_dotenv()
+except ImportError:
+    pass
+
+# --- LLM imports / setup (Claude) ---
+try:
+    from anthropic import Anthropic
+except ImportError:
+    Anthropic = None  # We'll handle this gracefully below
+
+APP_VERSION = "v11-llm-env-vars"
+
+app = Flask(__name__, static_folder="static")
+
+# Allow frontend (same machine) to call API
+CORS(
+    app,
+    resources={
+        r"/api/*": {
+            "origins": "*",
+            "methods": ["GET", "POST", "OPTIONS"],
+            "allow_headers": ["Content-Type"],
+        },
+        r"/*": {"origins": "*"},
+    },
+)
+
+# =========================
+# Environment variables
+# =========================
+
+# Anthropic API
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
+
+anthropic_client = (
+    Anthropic(api_key=ANTHROPIC_API_KEY) if (Anthropic and ANTHROPIC_API_KEY) else None
+)
+
+print("DEBUG Anthropic imported?:", bool(Anthropic))
+print("DEBUG API key present?:", bool(ANTHROPIC_API_KEY))
+print("DEBUG anthropic_client created?:", bool(anthropic_client))
+print("DEBUG model:", ANTHROPIC_MODEL)
+
+# Database configuration from env
 DB_CONFIG = {
-    'host': '127.0.0.1',
-    'port': 3306,
-    'user': 'root',
-    'password': '',
-    'database': 'market_data'
+    "host": os.environ.get("MYSQL_HOST", "127.0.0.1"),
+    "port": int(os.environ.get("MYSQL_PORT", "3306")),
+    "user": os.environ.get("MYSQL_USER", "root"),
+    "password": os.environ.get("MYSQL_PASSWORD", ""),
+    "database": os.environ.get("MYSQL_DATABASE", "market_data"),
 }
 
-# Asset name mappings for natural language processing
-ASSET_NAMES = {
-    'natural gas': 1, 'gas': 1,
-    'crude oil': 2, 'oil': 2,
-    'copper': 3,
-    'bitcoin': 4, 'btc': 4,
-    'ethereum': 5, 'eth': 5,
-    's&p 500': 6, 'sp500': 6, 's&p500': 6, 'sp 500': 6,
-    'nasdaq': 7, 'nasdaq 100': 7,
-    'apple': 8, 'aapl': 8,
-    'tesla': 9, 'tsla': 9,
-    'microsoft': 10, 'msft': 10,
-    'silver': 18,
-    'google': 11, 'googl': 11, 'alphabet': 11,
-    'nvidia': 12, 'nvda': 12,
-    'berkshire': 13, 'brk': 13, 'berkshire hathaway': 13,
-    'netflix': 14, 'nflx': 14,
-    'amazon': 15, 'amzn': 15,
-    'meta': 16, 'facebook': 16, 'fb': 16,
-    'gold': 17,
-    'platinum': 19
-}
 
 def get_db_connection():
-    """Create and return a database connection"""
+    """Create and return a database connection."""
     try:
         conn = mysql.connector.connect(**DB_CONFIG)
         return conn
@@ -52,345 +70,358 @@ def get_db_connection():
         print(f"Database connection error: {e}")
         return None
 
-def parse_natural_language_query(query):
-    """Parse natural language query and extract intent"""
-    query_lower = query.lower()
-    
-    # Extract asset name
-    asset_id = None
-    asset_name = None
-    for name, aid in ASSET_NAMES.items():
-        if name in query_lower:
-            asset_id = aid
-            asset_name = name
-            break
-    
-    # Detect query type
-    if any(word in query_lower for word in ['price', 'cost', 'value', 'worth', 'trading at']):
-        query_type = 'price'
-    elif any(word in query_lower for word in ['volume', 'vol', 'traded', 'shares']):
-        query_type = 'volume'
-    elif any(word in query_lower for word in ['max', 'maximum', 'highest', 'peak', 'top']):
-        query_type = 'max'
-    elif any(word in query_lower for word in ['min', 'minimum', 'lowest', 'bottom']):
-        query_type = 'min'
-    elif any(word in query_lower for word in ['average', 'avg', 'mean']):
-        query_type = 'average'
-    elif any(word in query_lower for word in ['recent', 'latest', 'current', 'today', 'now']):
-        query_type = 'recent'
-    elif any(word in query_lower for word in ['all', 'list', 'show', 'display']):
-        query_type = 'list'
-    else:
-        query_type = 'general'
-    
-    # Extract date if mentioned
-    date_pattern = r'(\d{4})-(\d{2})-(\d{2})|(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})'
-    date_match = re.search(date_pattern, query)
-    target_date = None
-    if date_match:
-        # Try to parse date
-        try:
-            if date_match.group(1):  # YYYY-MM-DD format
-                target_date = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}"
-            else:  # MM/DD/YYYY format
-                month, day, year = date_match.group(4), date_match.group(5), date_match.group(6)
-                if len(year) == 2:
-                    year = '20' + year
-                target_date = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
-        except:
-            pass
-    
-    return {
-        'asset_id': asset_id,
-        'asset_name': asset_name,
-        'query_type': query_type,
-        'target_date': target_date
-    }
 
-def execute_query(parsed):
-    """Execute SQL query based on parsed natural language"""
+# =========================
+# LLM (Claude) SQL generator
+# =========================
+
+DB_SCHEMA_DESCRIPTION = """
+You are an assistant that translates natural language questions into SQL for a MySQL database.
+The database schema is:
+
+Table: AssetType
+- asset_type_id INT PRIMARY KEY
+- name VARCHAR(20)
+- description VARCHAR(255)
+
+Table: Asset
+- asset_id INT PRIMARY KEY
+- name VARCHAR(50)
+- symbol VARCHAR(20)
+- asset_type_id INT REFERENCES AssetType(asset_type_id)
+- base_currency CHAR(3)
+
+Table: DailyMarketData
+- asset_id INT REFERENCES Asset(asset_id)
+- obs_date DATE
+- price DECIMAL(18,4)
+- volume BIGINT
+Primary key: (asset_id, obs_date)
+Constraints: price > 0, volume IS NULL OR volume >= 0
+"""
+
+
+def get_asset_reference_list():
+    """
+    Fetch the list of assets to show the LLM what actually exists.
+    Returns a list of dicts: {asset_id, name, symbol}.
+    """
     conn = get_db_connection()
     if not conn:
-        return {
-            'success': False,
-            'error': 'Database connection failed.'
-        }
-    
+        print("WARNING: Could not connect to DB to fetch asset list.")
+        return []
+
     cursor = conn.cursor(dictionary=True)
-    result = {'success': True, 'data': [], 'message': ''}
-    
     try:
-        query_type = parsed.get('query_type')
-        asset_id = parsed.get('asset_id')
-        asset_name = parsed.get('asset_name')
-        target_date = parsed.get('target_date')
-
-        # 1. List queries (don't need a specific asset)
-        if query_type == 'list':
-            cursor.execute("""
-                SELECT a.asset_id, a.name, a.symbol, at.name as type_name
-                FROM Asset a
-                JOIN AssetType at ON a.asset_type_id = at.asset_type_id
-                ORDER BY a.name
-            """)
-            result['data'] = cursor.fetchall()
-            result['message'] = f"Found {len(result['data'])} assets"
-            return result
-
-        # 2. No asset detected
-        if not asset_id:
-            # They clearly asked for a metric but no asset name
-            if query_type in ['price', 'volume', 'max', 'min', 'average', 'recent']:
-                result['success'] = False
-                result['error'] = (
-                    "I couldn't figure out which asset you're asking about. "
-                    "Please include a specific asset name, e.g. "
-                    "'What is the price of Bitcoin?', "
-                    "'Show recent data for Tesla', or "
-                    "'What is the average price of Gold?'."
-                )
-                result['message'] = ''
-                return result
-
-            # Completely general / illegible query
-            result['success'] = False
-            result['error'] = (
-                "I couldn't understand that query. "
-                "Try something like:\n"
-                "• 'What is the price of Bitcoin?'\n"
-                "• 'Show recent data for Tesla'\n"
-                "• 'Show the highest price for Apple'\n"
-                "• 'List all assets'"
-            )
-            result['message'] = ''
-            return result
-
-        # 3. Asset-specific queries
-        if query_type == 'recent':
-            # Get most recent data
-            cursor.execute("""
-                SELECT dmd.obs_date, dmd.price, dmd.volume, a.name, a.symbol
-                FROM DailyMarketData dmd
-                JOIN Asset a ON dmd.asset_id = a.asset_id
-                WHERE dmd.asset_id = %s
-                ORDER BY dmd.obs_date DESC
-                LIMIT 10
-            """, (asset_id,))
-            result['data'] = cursor.fetchall()
-            result['message'] = f"Recent data for {asset_name}"
-
-        elif query_type == 'max':
-            # Get maximum price
-            cursor.execute("""
-                SELECT dmd.obs_date, dmd.price, dmd.volume, a.name, a.symbol
-                FROM DailyMarketData dmd
-                JOIN Asset a ON dmd.asset_id = a.asset_id
-                WHERE dmd.asset_id = %s AND dmd.price IS NOT NULL
-                ORDER BY dmd.price DESC
-                LIMIT 1
-            """, (asset_id,))
-            result['data'] = cursor.fetchall()
-            if result['data']:
-                row = result['data'][0]
-                result['message'] = (
-                    f"Highest price for {asset_name}: "
-                    f"${row['price']:.2f} on {row['obs_date']}"
-                )
-
-        elif query_type == 'min':
-            # Get minimum price
-            cursor.execute("""
-                SELECT dmd.obs_date, dmd.price, dmd.volume, a.name, a.symbol
-                FROM DailyMarketData dmd
-                JOIN Asset a ON dmd.asset_id = a.asset_id
-                WHERE dmd.asset_id = %s AND dmd.price IS NOT NULL
-                ORDER BY dmd.price ASC
-                LIMIT 1
-            """, (asset_id,))
-            result['data'] = cursor.fetchall()
-            if result['data']:
-                row = result['data'][0]
-                result['message'] = (
-                    f"Lowest price for {asset_name}: "
-                    f"${row['price']:.2f} on {row['obs_date']}"
-                )
-
-        elif query_type == 'average':
-            # Get average price
-            cursor.execute("""
-                SELECT AVG(dmd.price) as avg_price, COUNT(*) as count, a.name, a.symbol
-                FROM DailyMarketData dmd
-                JOIN Asset a ON dmd.asset_id = a.asset_id
-                WHERE dmd.asset_id = %s AND dmd.price IS NOT NULL
-            """, (asset_id,))
-            row = cursor.fetchone()
-            if row and row['avg_price']:
-                result['data'] = [row]
-                result['message'] = (
-                    f"Average price for {asset_name}: "
-                    f"${row['avg_price']:.2f} (based on {row['count']} records)"
-                )
-
-        elif target_date:
-            # Get data for specific date
-            cursor.execute("""
-                SELECT dmd.obs_date, dmd.price, dmd.volume, a.name, a.symbol
-                FROM DailyMarketData dmd
-                JOIN Asset a ON dmd.asset_id = a.asset_id
-                WHERE dmd.asset_id = %s AND dmd.obs_date = %s
-            """, (asset_id, target_date))
-            result['data'] = cursor.fetchall()
-            if result['data']:
-                row = result['data'][0]
-                result['message'] = (
-                    f"{asset_name} on {target_date}: "
-                    f"Price ${row['price']:.2f}, "
-                    f"Volume {row['volume'] if row['volume'] else 'N/A'}"
-                )
-            else:
-                result['message'] = (
-                    f"No data found for {asset_name} on {target_date}"
-                )
-
-        else:
-            # General asset query - get recent data
-            cursor.execute("""
-                SELECT dmd.obs_date, dmd.price, dmd.volume, a.name, a.symbol
-                FROM DailyMarketData dmd
-                JOIN Asset a ON dmd.asset_id = a.asset_id
-                WHERE dmd.asset_id = %s
-                ORDER BY dmd.obs_date DESC
-                LIMIT 20
-            """, (asset_id,))
-            result['data'] = cursor.fetchall()
-            result['message'] = f"Data for {asset_name}"
-
+        cursor.execute("SELECT asset_id, name, symbol FROM Asset ORDER BY asset_id")
+        rows = cursor.fetchall()
+        return rows
     except mysql.connector.Error as e:
-        result['success'] = False
-        result['error'] = str(e)
-        result['message'] = f"Database error: {str(e)}"
-    
+        print(f"ERROR fetching asset reference list: {e}")
+        return []
     finally:
         cursor.close()
         conn.close()
-    
-    return result
 
-@app.route('/api/query', methods=['POST', 'OPTIONS'])
-def handle_query():
-    """Handle natural language query"""
-    if request.method == 'OPTIONS':
-        # Handle preflight request
-        response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
-        return response
-    
-    data = request.get_json()
-    if not data:
-        return jsonify({'success': False, 'error': 'Invalid JSON'}), 400
-    
-    query = data.get('query', '').strip()
-    
-    if not query:
-        return jsonify({'success': False, 'error': 'Query is required'}), 400
-    
-    # Parse the natural language query
-    parsed = parse_natural_language_query(query)
-    
-    # Execute the query
-    result = execute_query(parsed)
-    
-    response = jsonify(result)
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    return response
 
-@app.route('/api/assets', methods=['GET', 'OPTIONS'])
-def get_assets():
-    """Get list of all assets"""
-    if request.method == 'OPTIONS':
-        response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        return response
-    
+def is_safe_sql(sql: str) -> bool:
+    """Basic safety check: only allow simple SELECT statements."""
+    if not sql:
+        return False
+
+    normalized = " ".join(sql.strip().lower().split())
+
+    # Disallow dangerous stuff
+    forbidden_tokens = [
+        " insert ",
+        " update ",
+        " delete ",
+        " drop ",
+        " alter ",
+        " truncate ",
+        " create ",
+        " grant ",
+        " revoke ",
+        " replace ",
+        " merge ",
+        "--",
+        "/*",
+        "*/",
+    ]
+    if any(tok in normalized for tok in forbidden_tokens):
+        return False
+
+    if ";" in normalized.strip().rstrip(";"):
+        return False
+
+    if not normalized.startswith("select"):
+        return False
+
+    return True
+
+
+def generate_sql_from_llm(user_query: str) -> str:
+    """Call Claude to generate a SQL query from the user question."""
+    if not anthropic_client:
+        raise RuntimeError(
+            "Anthropic client not configured. "
+            "Make sure 'anthropic' is installed and ANTHROPIC_API_KEY is set."
+        )
+
+    assets = get_asset_reference_list()
+    if assets:
+        asset_reference_text = "\n".join(
+            f"- id {row['asset_id']}: {row['name']} (symbol: {row['symbol']})"
+            for row in assets
+        )
+    else:
+        asset_reference_text = "WARNING: Could not load assets from the database."
+
+    prompt = f"""
+You are a MySQL expert. Given a user's question and the database schema, write a single
+safe SQL SELECT query that answers the question.
+
+Here is the ACTUAL list of assets in the database:
+{asset_reference_text}
+
+Important rules about assets:
+- ALWAYS identify assets using Asset.symbol in WHERE clauses (e.g., 'AAPL', 'TSLA', 'BTC').
+- You may use Asset.name in SELECT lists, but NOT in filters.
+- Never guess asset names that are not in the list above.
+- If the user says "Apple", map it to the asset whose name or symbol best matches
+  (in this case 'Apple Inc.' with symbol 'AAPL') from the list above.
+- If you cannot confidently map the user's wording to one of the assets, return:
+  SELECT 'Cannot answer this question from the available data' AS message;
+
+General rules:
+- Only use the tables and columns from the schema.
+- NEVER modify data: no INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, etc.
+- Only output the SQL query, nothing else.
+- Prefer using Asset.symbol to identify assets instead of numeric ids.
+
+Database schema:
+{DB_SCHEMA_DESCRIPTION}
+
+User question:
+{user_query}
+""".strip()
+
+    resp = anthropic_client.messages.create(
+        model=ANTHROPIC_MODEL,
+        max_tokens=400,
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": prompt}],
+            }
+        ],
+    )
+
+    text = resp.content[0].text.strip()
+
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("sql\n"):
+            text = text[4:]
+        text = text.strip()
+
+    print("Generated SQL from LLM:", text)  # helpful for debugging
+    return text
+
+
+def run_sql(sql: str):
+    """Execute raw SQL and return rows or an error string."""
     conn = get_db_connection()
     if not conn:
-        return jsonify({'error': 'Database connection failed'}), 500
-    
+        return None, "Database connection failed."
+
     cursor = conn.cursor(dictionary=True)
     try:
-        cursor.execute("""
+        cursor.execute(sql)
+        rows = cursor.fetchall()
+        return rows, None
+    except mysql.connector.Error as e:
+        return None, str(e)
+    finally:
+        cursor.close()
+        conn.close()
+
+
+# =========================
+# API routes
+# =========================
+
+
+@app.route("/api/query", methods=["POST", "OPTIONS"])
+def handle_query():
+    """Handle natural language query using Claude-generated SQL only."""
+    if request.method == "OPTIONS":
+        response = jsonify({"status": "ok"})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type")
+        response.headers.add("Access-Control-Allow-Methods", "POST, OPTIONS")
+        return response
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "Invalid JSON"}), 400
+
+    user_query = (data.get("query") or "").strip()
+
+    if not user_query:
+        return jsonify({"success": False, "error": "Query is required"}), 400
+
+
+    try:
+        sql = generate_sql_from_llm(user_query)
+    except Exception as e:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": f"LLM error: {e}",
+                }
+            ),
+            500,
+        )
+
+
+    if not is_safe_sql(sql):
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "Generated SQL was rejected as unsafe.",
+                    "sql": sql,
+                }
+            ),
+            400,
+        )
+
+
+    rows, db_error = run_sql(sql)
+    if db_error:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": f"Database error: {db_error}",
+                    "sql": sql,
+                }
+            ),
+            500,
+        )
+
+    resp = {
+        "success": True,
+        "message": f"LLM-generated query executed successfully. Returned {len(rows)} row(s).",
+        "sql": sql,
+        "data": rows,
+    }
+    response = jsonify(resp)
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    return response
+
+
+@app.route("/api/assets", methods=["GET", "OPTIONS"])
+def get_assets():
+    """Get list of all assets (non-LLM helper endpoint)."""
+    if request.method == "OPTIONS":
+        response = jsonify({"status": "ok"})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        return response
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """
             SELECT a.asset_id, a.name, a.symbol, at.name as type_name
             FROM Asset a
             JOIN AssetType at ON a.asset_type_id = at.asset_type_id
             ORDER BY a.name
-        """)
+        """
+        )
         assets = cursor.fetchall()
-        response = jsonify({'success': True, 'data': assets})
-        response.headers.add('Access-Control-Allow-Origin', '*')
+        response = jsonify({"success": True, "data": assets})
+        response.headers.add("Access-Control-Allow-Origin", "*")
         return response
     except mysql.connector.Error as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({"success": False, "error": str(e)}), 500
     finally:
         cursor.close()
         conn.close()
 
-@app.route('/health', methods=['GET'])
-def health_check():
-    """Health check endpoint"""
-    return jsonify({'status': 'ok', 'version': APP_VERSION})
 
-@app.route('/')
+@app.route("/health", methods=["GET"])
+def health_check():
+    """Health check endpoint."""
+    return jsonify(
+        {
+            "status": "ok",
+            "version": APP_VERSION,
+            "llm_enabled": bool(anthropic_client),
+            "model": ANTHROPIC_MODEL,
+        }
+    )
+
+
+@app.route("/")
 def index():
-    """Serve the main HTML page with no-cache headers"""
-    response = send_file(os.path.join(app.static_folder, 'index.html'))
-    # Add headers to prevent caching during development
-    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-    response.headers['Pragma'] = 'no-cache'
-    response.headers['Expires'] = '0'
+    """Serve the main HTML page with no-cache headers."""
+    response = send_file(os.path.join(app.static_folder, "index.html"))
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
     return response
 
-# Flask will automatically serve static files from the static_folder
-# But we keep explicit routes for better control
-@app.route('/style.css')
+
+@app.route("/style.css")
 def serve_css():
-    """Serve CSS file with no-cache headers"""
+    """Serve CSS file with no-cache headers."""
     try:
-        response = send_file(os.path.join(app.static_folder, 'style.css'), mimetype='text/css')
-        # Add headers to prevent caching during development
-        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-        response.headers['Pragma'] = 'no-cache'
-        response.headers['Expires'] = '0'
+        response = send_file(
+            os.path.join(app.static_folder, "style.css"), mimetype="text/css"
+        )
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
         return response
     except Exception as e:
         print(f"Error serving CSS: {e}")
-        return '', 404
+        return "", 404
 
-@app.route('/script.js')
+
+@app.route("/script.js")
 def serve_js():
-    """Serve JavaScript file with no-cache headers"""
+    """Serve JavaScript file with no-cache headers."""
     try:
-        response = send_file(os.path.join(app.static_folder, 'script.js'), mimetype='application/javascript')
-        # Add headers to prevent caching during development
-        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-        response.headers['Pragma'] = 'no-cache'
-        response.headers['Expires'] = '0'
+        response = send_file(
+            os.path.join(app.static_folder, "script.js"),
+            mimetype="application/javascript",
+        )
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
         return response
     except Exception as e:
         print(f"Error serving JS: {e}")
-        return '', 404
+        return "", 404
 
-@app.route('/favicon.ico')
+
+@app.route("/favicon.ico")
 def favicon():
-    """Serve favicon (return 204 No Content to avoid 404)"""
-    return '', 204
+    """Serve favicon (return 204 No Content to avoid 404)."""
+    return "", 204
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
+    port = int(os.environ.get("FLASK_PORT", "5001"))
     print("Starting Flask server...")
     print("Open your browser and navigate to:")
-    print("  http://127.0.0.1:8000")
+    print(f"  http://127.0.0.1:{port}")
     print("Press Ctrl+C to stop the server")
-    app.run(debug=True, host='127.0.0.1', port=8000, threaded=True)
-
-
+    app.run(debug=True, host="127.0.0.1", port=port, threaded=True)

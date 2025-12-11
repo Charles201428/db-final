@@ -37,6 +37,7 @@ db final/
 - **Python** 3.7+ (with conda/miniconda recommended)
 - **MySQL credentials** (username and password)
 - **Kaggle API credentials** (if downloading dataset fresh)
+- **Anthropic API key** (required for natural language query feature - get it from https://console.anthropic.com/)
 
 ## Setup Instructions
 
@@ -153,7 +154,35 @@ A modern web interface for querying market data using natural language.
    }
    ```
 
-3. **Run the Flask Server**:
+3. **Set Up Anthropic API Key** (Required for natural language queries):
+   The application uses Claude (Anthropic's AI) to convert natural language queries into SQL.
+   
+   **Option A: Set environment variable (Recommended)**
+   ```bash
+   # On macOS/Linux:
+   export ANTHROPIC_API_KEY="your-api-key-here"
+   
+   # On Windows (Command Prompt):
+   set ANTHROPIC_API_KEY=your-api-key-here
+   
+   # On Windows (PowerShell):
+   $env:ANTHROPIC_API_KEY="your-api-key-here"
+   ```
+   
+   **Option B: Set in your shell profile (Persistent)**
+   Add to `~/.bashrc`, `~/.zshrc`, or `~/.profile`:
+   ```bash
+   export ANTHROPIC_API_KEY="your-api-key-here"
+   ```
+   
+   To get your API key:
+   1. Go to https://console.anthropic.com/
+   2. Sign up or log in
+   3. Navigate to API Keys section
+   4. Create a new API key
+   5. Copy and set it as shown above
+
+4. **Run the Flask Server**:
    ```bash
    python app.py
    ```
