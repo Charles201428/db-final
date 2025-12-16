@@ -37,6 +37,7 @@ db final/
 - **Python** 3.7+ (with conda/miniconda recommended)
 - **MySQL credentials** (username and password)
 - **Kaggle API credentials** (if downloading dataset fresh)
+- **Anthropic API key** (required for natural language query feature - get it from https://console.anthropic.com/)
 
 ## Setup Instructions
 
@@ -122,6 +123,72 @@ This script will:
    ```bash
    python load_data.py
    ```
+
+## Frontend for Market Data Query Interface
+
+A modern web interface for querying market data using natural language.
+
+### Features
+
+- **Natural Language Queries**: Ask questions in plain English about market data
+- **Modern UI**: Clean, responsive design with gradient styling
+- **Real-time Feedback**: Get instant responses to your queries
+- **Example Queries**: Click on example tags to quickly try different queries
+
+### Setup
+
+1. **Install Dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. **Configure Database**:
+   Make sure your MySQL database is running and update the `DB_CONFIG` in `app.py` if needed:
+   ```python
+   DB_CONFIG = {
+       'host': '127.0.0.1',
+       'port': 3306,
+       'user': 'root',
+       'password': '',  # Update if needed
+       'database': 'market_data'
+   }
+   ```
+
+3. **Set Up Anthropic API Key** (Required for natural language queries):
+   The application uses Claude (Anthropic's AI) to convert natural language queries into SQL.
+   
+   **Option A: Set environment variable (Recommended)**
+   ```bash
+   # On macOS/Linux:
+   export ANTHROPIC_API_KEY="your-api-key-here"
+   
+   # On Windows (Command Prompt):
+   set ANTHROPIC_API_KEY=your-api-key-here
+   
+   # On Windows (PowerShell):
+   $env:ANTHROPIC_API_KEY="your-api-key-here"
+   ```
+   
+   **Option B: Set in your shell profile (Persistent)**
+   Add to `~/.bashrc`, `~/.zshrc`, or `~/.profile`:
+   ```bash
+   export ANTHROPIC_API_KEY="your-api-key-here"
+   ```
+   
+   To get your API key:
+   1. Go to https://console.anthropic.com/
+   2. Sign up or log in
+   3. Navigate to API Keys section
+   4. Create a new API key
+   5. Copy and set it as shown above
+
+4. **Run the Flask Server**:
+   ```bash
+   python app.py
+   ```
+
+4. **Open in Browser**:
+   Navigate to `http://127.0.0.1:8000/` in your web browser
 
 ## Database Schema
 
@@ -260,11 +327,8 @@ ORDER BY max_price DESC;
 - [ ] Add indexes for performance optimization
 - [ ] Create backup/restore scripts
 
-## License
-
-[Add your license information here]
-
 ## Contributors
 
-[Add contributor information here]
+Charles Weng
+Cassie Zhang
 
