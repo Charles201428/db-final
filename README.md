@@ -188,7 +188,7 @@ A modern web interface for querying market data using natural language.
    ```
 
 4. **Open in Browser**:
-   Navigate to `http://127.0.0.1:8000/` in your web browser
+   Navigate to `http://127.0.0.1:5001/` in your web browser
 
 ## Database Schema
 
