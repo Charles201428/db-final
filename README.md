@@ -319,16 +319,8 @@ ORDER BY max_price DESC;
 - **inspect_database.py**: Database inspection and verification tool
 - **query_all_data.sql**: Sample SQL queries for common operations
 
-## Next Steps
-
-- [ ] Push CSV dataset to repository
-- [ ] Add data validation scripts
-- [ ] Create data analysis queries
-- [ ] Add indexes for performance optimization
-- [ ] Create backup/restore scripts
-
 ## Contributors
 
-Charles Weng
+Charles Weng,
 Cassie Zhang
 
